@@ -6,6 +6,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#2aa6b8">
   <title>Circuit Playground</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@400;600;700&display=swap" rel="stylesheet">
   <!-- #endregion -->
   <!-- #region styles -->
   <style>
@@ -16,7 +19,7 @@
       --wire-pos:#e04848; --wire-neg:#2d2926; --wire-neutral:#4a90d9;
       --grid:#e8dfd4;
       --radius:12px; --shadow:0 3px 16px rgba(45,41,38,.10);
-      --font:'Segoe UI',system-ui,-apple-system,Roboto,sans-serif;
+      --font:'League Spartan','Segoe UI',system-ui,-apple-system,Roboto,sans-serif;
       --fs:18px;
     }
     *{box-sizing:border-box}
@@ -565,7 +568,7 @@ class CircuitSolver {
         ctx.strokeRect(b.x, b.y, b.w, b.h);
       }
       ctx.fillStyle = '#1b2430';
-      ctx.font = 'bold 13px system-ui';
+      ctx.font = 'bold 13px League Spartan, system-ui';
       ctx.textAlign = 'center';
       ctx.fillText(label, c.x, c.y - b.h/2 - 8);
     }
@@ -664,7 +667,7 @@ class CircuitSolver {
       defaultBodyFrame(ctx, c, 'Buzzer');
       ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
       ctx.beginPath(); ctx.arc(c.x, c.y, 12, 0, Math.PI*2); ctx.stroke();
-      ctx.fillStyle = '#1b2430'; ctx.font = '16px system-ui'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#1b2430'; ctx.font = '16px League Spartan, system-ui'; ctx.textAlign = 'center';
       ctx.fillText('♪', c.x, c.y+5);
     });
     registerDrawer('motor', (ctx, c) => {
@@ -695,7 +698,7 @@ class CircuitSolver {
       ctx.beginPath(); ctx.moveTo(c.x-30, c.y); ctx.lineTo(c.x-8, c.y); ctx.stroke();              // base
       ctx.beginPath(); ctx.moveTo(c.x-8, c.y-6); ctx.lineTo(c.x+12, c.y-14); ctx.lineTo(c.x+12, c.y-24); ctx.stroke(); // collector
       ctx.beginPath(); ctx.moveTo(c.x-8, c.y+6); ctx.lineTo(c.x+12, c.y+14); ctx.lineTo(c.x+12, c.y+24); ctx.stroke(); // emitter
-      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'left';
+      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 11px League Spartan, system-ui'; ctx.textAlign = 'left';
       ctx.fillText('B', c.x-28, c.y-4); ctx.fillText('C', c.x+14, c.y-18); ctx.fillText('E', c.x+14, c.y+22);
     });
 
@@ -706,12 +709,12 @@ class CircuitSolver {
       ctx.lineWidth = c.selected ? 2 : 1.25;
       ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 13px League Spartan, system-ui'; ctx.textAlign = 'center';
       ctx.fillText(title, c.x, c.y - b.h/2 - 8);
       if (badge) {
         ctx.fillStyle = badge.bg; ctx.strokeStyle = badge.bg;
         ctx.beginPath(); ctx.arc(c.x + b.w/2 - 8, c.y - b.h/2 + 8, 6, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 8px system-ui';
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 8px League Spartan, system-ui';
         ctx.fillText(badge.text, c.x + b.w/2 - 8, c.y - b.h/2 + 11);
       }
     }
@@ -790,7 +793,7 @@ class CircuitSolver {
       ctx.beginPath();
       ctx.moveTo(c.x-12, c.y+14); ctx.lineTo(c.x-8, c.y-12); ctx.lineTo(c.x+8, c.y-12); ctx.lineTo(c.x+12, c.y+14); ctx.closePath();
       ctx.fill(); ctx.strokeStyle = '#1b2430'; ctx.stroke();
-      ctx.fillStyle = '#f0a500'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#f0a500'; ctx.font = 'bold 12px League Spartan, system-ui'; ctx.textAlign = 'center';
       ctx.fillText('☢', c.x, c.y+4);
     });
 
@@ -828,7 +831,7 @@ class CircuitSolver {
       defaultBodyFrame(ctx, c, label);
       ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(c.x, c.y, 14, 0, Math.PI*2); ctx.stroke();
-      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 12px League Spartan, system-ui'; ctx.textAlign = 'center';
       ctx.fillText(readout, c.x, c.y+4);
     }
     registerDrawer('voltmeter', (ctx, c) => meterFrame(ctx, c, 'Voltmeter', formatSI(c.state.voltageAcross||0, 'V')));
@@ -1205,7 +1208,7 @@ class CircuitSolver {
       _drawChart(cv, sources) {
         const c = cv.getContext('2d'); const W = cv.width, H = cv.height;
         c.clearRect(0,0,W,H);
-        c.fillStyle = '#1b2430'; c.font='12px system-ui';
+        c.fillStyle = '#1b2430'; c.font='12px League Spartan, system-ui';
         const maxV = Math.max(...sources.map(s => s.props.V), 1);
         const bw = (W - 40) / sources.length;
         sources.forEach((s, i) => {
