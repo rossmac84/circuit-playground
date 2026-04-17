@@ -1,0 +1,1729 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <!-- #region meta -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#2aa6b8">
+  <title>Circuit Playground</title>
+  <!-- #endregion -->
+  <!-- #region styles -->
+  <style>
+    :root {
+      --bg:#fef9f0; --panel:#ffffff; --ink:#2d2926; --muted:#6b5e54;
+      --accent:#1aafa0; --accent-ink:#ffffff;
+      --amber:#f5a623; --green:#34c759; --red:#e04848;
+      --wire-pos:#e04848; --wire-neg:#2d2926; --wire-neutral:#4a90d9;
+      --grid:#e8dfd4;
+      --radius:12px; --shadow:0 3px 16px rgba(45,41,38,.10);
+      --font:'Segoe UI',system-ui,-apple-system,Roboto,sans-serif;
+      --fs:18px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{
+      font-family:var(--font); font-size:var(--fs); color:var(--ink);
+      background:var(--bg); overflow:hidden;
+      display:grid;
+      grid-template-columns: 280px 1fr 320px;
+      grid-template-rows: 64px 1fr;
+      grid-template-areas:
+        "toolbar toolbar toolbar"
+        "sidebar canvas   props";
+    }
+    @media (max-width: 1000px){
+      body{
+        grid-template-columns: 1fr;
+        grid-template-rows: 64px auto 1fr auto;
+        grid-template-areas: "toolbar" "sidebar" "canvas" "props";
+      }
+    }
+    #toolbar{grid-area:toolbar; background:var(--panel); border-bottom:1px solid var(--grid); display:flex; align-items:center; gap:12px; padding:0 12px; box-shadow:var(--shadow); z-index:5}
+    #sidebar{grid-area:sidebar; background:var(--panel); border-right:1px solid var(--grid); overflow:auto; padding:10px}
+    #stage{grid-area:canvas; position:relative; overflow:hidden; background:var(--bg)}
+    #board{position:absolute; inset:0; display:block; touch-action:none}
+    #hud{position:absolute; left:10px; bottom:10px; background:rgba(255,255,255,.85); padding:4px 8px; border-radius:8px; font-size:14px; color:var(--muted); pointer-events:none}
+    #props{grid-area:props; background:var(--panel); border-left:1px solid var(--grid); overflow:auto; padding:12px}
+    .btn{appearance:none; border:1px solid var(--grid); background:#fff; color:var(--ink); padding:10px 14px; border-radius:10px; cursor:pointer; font:inherit; min-height:48px; font-size:16px}
+    .btn:hover{border-color:var(--accent)} .btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+    .btn.primary{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
+    .toast-wrap{position:fixed; top:70px; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; gap:8px; z-index:50; pointer-events:none}
+    .toast{background:var(--panel); box-shadow:var(--shadow); border-radius:8px; padding:10px 14px; border-left:4px solid var(--accent); max-width:360px}
+    .toast.success{border-left-color:var(--green)}
+    .toast.warn{border-left-color:var(--amber)}
+    .toast.error{border-left-color:var(--red)}
+    .overlay{position:fixed; inset:0; background:rgba(27,36,48,.55); display:none; align-items:center; justify-content:center; z-index:40}
+    .overlay.show{display:flex}
+    .overlay .sheet{background:var(--panel); border-radius:12px; padding:18px; box-shadow:var(--shadow); max-width:min(900px,92vw); max-height:86vh; overflow:auto}
+    .tour-hl{outline:3px solid var(--accent); outline-offset:4px; border-radius:10px; animation:tp 1.5s ease-out infinite}
+    @keyframes tp{0%{box-shadow:0 0 0 0 rgba(42,166,184,.45)}100%{box-shadow:0 0 0 14px rgba(42,166,184,0)}}
+    .tour-bubble{position:fixed; z-index:45; background:var(--panel); padding:16px 20px; border-radius:12px; box-shadow:var(--shadow); max-width:380px; font-size:18px; line-height:1.5}
+    .tour-bubble h3{margin:0 0 8px; font-size:20px; color:var(--accent)}
+    .tour-bubble .row{display:flex; justify-content:space-between; align-items:center; margin-top:12px; gap:8px}
+    .explore-toggle{display:flex;align-items:center;gap:8px;padding:14px 8px;border:none;background:none;cursor:pointer;font:inherit;font-size:16px;font-weight:600;color:var(--accent);width:100%}
+    .explore-toggle::before{content:'';display:inline-block;width:0;height:0;border-left:7px solid var(--accent);border-top:5px solid transparent;border-bottom:5px solid transparent;transition:transform .2s}
+    .explore-toggle.open::before{transform:rotate(90deg)}
+    .explore-section{display:none}
+    .explore-section.open{display:block}
+  </style>
+  <!-- #endregion -->
+</head>
+<body>
+  <!-- #region markup -->
+  <header id="toolbar" role="toolbar" aria-label="Main toolbar"></header>
+  <aside id="sidebar" aria-label="Component palette"></aside>
+  <main id="stage" aria-label="Circuit board">
+    <canvas id="board" aria-label="Circuit drawing area"></canvas>
+    <div id="hud" aria-live="polite">x: 0, y: 0</div>
+  </main>
+  <aside id="props" aria-label="Properties"></aside>
+  <div class="toast-wrap" id="toasts" aria-live="polite"></div>
+  <div class="overlay" id="overlay" role="dialog" aria-modal="true"></div>
+  <!-- #endregion -->
+  <!-- #region script -->
+  <script>
+    'use strict';
+    const CONFIG = {
+      grid: { size: 20, dot: 1.2, colour: '#e8dfd4' },
+      canvas: { minZoom: 0.3, maxZoom: 3, zoomStep: 1.1, panButton: 0 },
+      pin: { radius: 5, hitRadius: 10, snap: 8 },
+      wire: { width: 2.5, selectedWidth: 3.5, dotSpeedPxPerAmpS: 40, dotSpacingPx: 24, dotRadius: 2.5 },
+      simulation: { tickMs: 33, shortCircuitThresholdA: 50, buzzerThresholdA: 0.005 },
+      audio: { buzzerHz: 440, buzzerGain: 0.08 },
+      defaults: { resistor: 220, capacitor: 1e-6, inductor: 1e-3, fuseRating: 1, copperResistivity: 0.01, nichromeResistivity: 1.1 },
+      storage: { tourKey: 'cp_tour_done_v1', shareHashPrefix: '#c=' },
+    };
+    const TIME = { freeze: null };
+    function nowSec() { return TIME.freeze != null ? TIME.freeze : performance.now()/1000; }
+    const $ = sel => document.querySelector(sel);
+    const uid = (() => { let n = 0; return p => `${p}_${++n}`; })();
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+    const snap = (v, step = CONFIG.grid.size) => Math.round(v / step) * step;
+    function formatSI(value, unit) {
+      if (!isFinite(value)) return '—';
+      const a = Math.abs(value);
+      const units = [
+        { f: 1e9, s: 'G' }, { f: 1e6, s: 'M' }, { f: 1e3, s: 'k' },
+        { f: 1, s: '' }, { f: 1e-3, s: 'm' }, { f: 1e-6, s: 'µ' },
+        { f: 1e-9, s: 'n' }, { f: 1e-12, s: 'p' },
+      ];
+      if (a === 0) return `0 ${unit}`;
+      const pick = units.find(u => a >= u.f) || units[units.length - 1];
+      return `${(value / pick.f).toFixed(2)} ${pick.s}${unit}`;
+    }
+    class Renderer {
+      constructor(canvas, hud) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.hud = hud;
+        this.pan = { x: 0, y: 0 };
+        this.zoom = 1;
+        this.world = { mx: 0, my: 0 };
+        this._resize();
+        window.addEventListener('resize', () => this._resize());
+      }
+      _resize() {
+        const dpr = window.devicePixelRatio || 1;
+        const r = this.canvas.parentElement.getBoundingClientRect();
+        this.canvas.width = Math.floor(r.width * dpr);
+        this.canvas.height = Math.floor(r.height * dpr);
+        this.canvas.style.width = r.width + 'px';
+        this.canvas.style.height = r.height + 'px';
+        this.dpr = dpr;
+        this.cssW = r.width; this.cssH = r.height;
+      }
+      screenToWorld(sx, sy) {
+        return { x: (sx - this.pan.x) / this.zoom, y: (sy - this.pan.y) / this.zoom };
+      }
+      applyTransform() {
+        const c = this.ctx;
+        c.setTransform(this.dpr * this.zoom, 0, 0, this.dpr * this.zoom,
+          this.dpr * this.pan.x, this.dpr * this.pan.y);
+      }
+      drawGrid() {
+        const c = this.ctx;
+        c.save();
+        c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        c.clearRect(0, 0, this.cssW, this.cssH);
+        c.fillStyle = '#fef9f0';
+        c.fillRect(0, 0, this.cssW, this.cssH);
+        const step = CONFIG.grid.size * this.zoom;
+        if (step > 4) {
+          c.fillStyle = CONFIG.grid.colour;
+          const ox = ((this.pan.x % step) + step) % step;
+          const oy = ((this.pan.y % step) + step) % step;
+          for (let x = ox; x < this.cssW; x += step) {
+            for (let y = oy; y < this.cssH; y += step) {
+              c.beginPath();
+              c.arc(x, y, CONFIG.grid.dot, 0, Math.PI * 2);
+              c.fill();
+            }
+          }
+        }
+        c.restore();
+      }
+      updateHUD() {
+        this.hud.textContent = `x: ${Math.round(this.world.mx)}, y: ${Math.round(this.world.my)}`;
+      }
+      tick() {
+        this.drawGrid();
+        this.applyTransform();
+        // components/wires drawn by App in later phases
+        this.updateHUD();
+      }
+    }
+    class Pin {
+      constructor(component, dx, dy, label) {
+        this.id = uid('pin');
+        this.component = component;
+        this.dx = dx; this.dy = dy;
+        this.label = label || '';
+        this.nodeId = null; // assigned by CircuitGraph
+      }
+      worldX() { return this.component.x + this.dx; }
+      worldY() { return this.component.y + this.dy; }
+    }
+
+    class Component {
+      constructor(type, x, y) {
+        this.id = uid('c');
+        this.type = type;               // catalog id, e.g. 'battery_aa'
+        this.x = snap(x); this.y = snap(y);
+        this.rotation = 0;              // radians, multiples of PI/2
+        this.pins = [];                 // subclasses push Pins
+        this.props = {};                // user-editable values (V, R, C, colour, …)
+        this.state = {};                // simulation outputs (current, voltageAcross, etc.)
+        this.selected = false;
+      }
+      bounds() {
+        // default 60x40 rectangle centred on (x,y); subclasses may override
+        return { x: this.x - 35, y: this.y - 22, w: 70, h: 44 };
+      }
+      hitTest(wx, wy) {
+        const b = this.bounds();
+        return wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h;
+      }
+      draw(ctx) {
+        const def = CATALOG_BY_ID[this.type];
+        const fn = DRAWERS[this.type] || DRAWERS._default;
+        fn(ctx, this, { def });
+      }
+      drawPins(ctx) {
+        for (const p of this.pins) {
+          ctx.beginPath();
+          ctx.arc(p.worldX(), p.worldY(), CONFIG.pin.radius, 0, Math.PI * 2);
+          ctx.fillStyle = '#fff';
+          ctx.strokeStyle = '#1b2430';
+          ctx.lineWidth = 1.25;
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    }
+
+    class Wire {
+      constructor(a, b, colour = 'var(--wire-neg)') {
+        this.id = uid('w');
+        this.a = a; this.b = b; // two Pin references
+        this.colour = colour;
+        this.selected = false;
+        this.current = 0; // signed amps, positive from a→b
+      }
+      draw(ctx, tSeconds) {
+        const ax = this.a.worldX(), ay = this.a.worldY();
+        const bx = this.b.worldX(), by = this.b.worldY();
+        ctx.strokeStyle = this.colour;
+        ctx.lineWidth = this.selected ? CONFIG.wire.selectedWidth : CONFIG.wire.width;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        const I = this.current;
+        if (Math.abs(I) > 1e-5) {
+          const segments = [[ax,ay,bx,ay],[bx,ay,bx,by]];
+          const speed = clamp(Math.abs(I) * CONFIG.wire.dotSpeedPxPerAmpS, 10, 200) * Math.sign(I || 1);
+          const phase = (tSeconds * speed) % CONFIG.wire.dotSpacingPx;
+          let dist0 = -phase;
+          ctx.fillStyle = '#2aa6b8';
+          for (const [x1,y1,x2,y2] of segments) {
+            const segLen = Math.abs(x2-x1) + Math.abs(y2-y1);
+            for (let d = dist0; d < segLen; d += CONFIG.wire.dotSpacingPx) {
+              if (d < 0) continue;
+              const t = d / segLen;
+              const dx = x1 + (x2-x1) * t;
+              const dy = y1 + (y2-y1) * t;
+              ctx.beginPath();
+              ctx.arc(dx, dy, CONFIG.wire.dotRadius, 0, Math.PI*2);
+              ctx.fill();
+            }
+            dist0 -= segLen;
+          }
+        }
+      }
+      hitTest(wx, wy, tolerance = 6) {
+        const ax = this.a.worldX(), ay = this.a.worldY();
+        const bx = this.b.worldX(), by = this.b.worldY();
+        const onSeg = (x1,y1,x2,y2) => {
+          const dx = x2-x1, dy = y2-y1, L2 = dx*dx + dy*dy || 1;
+          const t = clamp(((wx-x1)*dx + (wy-y1)*dy)/L2, 0, 1);
+          return dist(wx, wy, x1+dx*t, y1+dy*t) <= tolerance;
+        };
+        return onSeg(ax, ay, bx, ay) || onSeg(bx, ay, bx, by);
+      }
+    }
+
+    class CircuitGraph {
+      constructor(components, wires) {
+        this.components = components;
+        this.wires = wires;
+        this.nodes = [];        // array of { id, pins:Set<Pin> }
+        this.pinToNode = new Map();
+        this._build();
+      }
+      _build() {
+        // Union-find over pins using wires as equivalences
+        const parent = new Map();
+        const find = p => { while (parent.get(p) !== p) { parent.set(p, parent.get(parent.get(p))); p = parent.get(p); } return p; };
+        const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+        for (const c of this.components) for (const p of c.pins) parent.set(p, p);
+        for (const w of this.wires) union(w.a, w.b);
+        // Group by root
+        const roots = new Map();
+        for (const c of this.components) for (const p of c.pins) {
+          const r = find(p);
+          if (!roots.has(r)) roots.set(r, { id: this.nodes.length, pins: new Set() }) && this.nodes.push(roots.get(r));
+          roots.get(r).pins.add(p);
+          this.pinToNode.set(p, roots.get(r));
+        }
+        // Assign sequential ids
+        this.nodes.forEach((n, i) => n.id = i);
+        // Assign nodeId back onto pins for later readouts
+        for (const n of this.nodes) for (const p of n.pins) p.nodeId = n.id;
+      }
+    }
+
+    /*
+  CircuitSolver — simplified DC Modified Nodal Analysis.
+  - One ground node is picked (node 0).
+  - For each remaining node i, an unknown v_i (voltage vs. ground) is added to the system.
+  - For each voltage source, an extra unknown i_src is added.
+  - Components contribute "stamps" to a matrix A and vector b so Ax = b.
+  - Gaussian elimination solves x.
+
+  Steady-state simplifications:
+    resistor R between nodes a,b → admittance 1/R between a and b
+    capacitor in DC → treated as open (admittance 0), no stamp
+    inductor in DC  → treated as a wire (very low R, 1e-6) to avoid singular matrices
+    switch closed   → wire (1e-6 ohm); open → not present (no stamp)
+    fuse (not blown)→ wire; blown → open
+    DC voltage source V between nodes a,b → voltage constraint v_a − v_b = V plus current unknown
+    diode           → linearised: if pre-solve estimated forward-biased, treat as 0.7 V drop series with tiny R; else open
+    LED             → same as diode with Vf from props
+    bulb / buzzer / motor → resistors using props.R
+    meters:
+      voltmeter → very large resistor (1e9 Ω), reads voltage across
+      ammeter   → wire (1e-6 Ω), reads current through
+      ohmmeter  → only valid when connected across an isolated subnetwork; computes ratio if powered probe used; for primary-school use we treat it as voltmeter+tiny source giving a resistance readout when the rest of the circuit is unpowered
+    AC mains sources → solved as if DC at the RMS voltage value; a badge explains this is a simplification.
+*/
+
+class CircuitSolver {
+  constructor(graph, components, wires) {
+    this.graph = graph;
+    this.components = components;
+    this.wires = wires;
+    this.nodeVoltages = new Array(graph.nodes.length).fill(0);
+    this.branchCurrents = new Map(); // component.id -> amps (positive = pin[0] -> pin[1])
+    this.status = 'ok'; // 'ok' | 'open' | 'short' | 'no_source'
+  }
+  solve() {
+    const n = this.graph.nodes.length;
+    if (n === 0) { this.status = 'no_source'; return; }
+    // Collect voltage sources needing extra unknowns
+    const vsources = [];
+    const resistors = [];
+    const ledLike = [];
+    for (const c of this.components) {
+      const k = CATALOG_BY_ID[c.type].kind;
+      if (k === 'dc' || k === 'mains') {
+        if (c.pins.length >= 2) vsources.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, V: c.props.V });
+      } else if (k === 'r' || k === 'bulb' || k === 'buzzer' || k === 'motor') {
+        resistors.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, R: Math.max(1e-9, c.props.R) });
+      } else if (k === 'fuse') {
+        if (!c.props.blown) resistors.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, R: 1e-6 });
+      } else if (k === 'switch') {
+        if (c.props.closed) resistors.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, R: 1e-6 });
+      } else if (k === 'l' || k === 'ameter') {
+        resistors.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, R: 1e-6 });
+      } else if (k === 'c' || k === 'vmeter' || k === 'ometer') {
+        resistors.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, R: 1e9 });
+      } else if (k === 'diode' || k === 'led') {
+        ledLike.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, Vf: c.props.Vf ?? 0.7 });
+      } else if (k === 'npn') {
+        // trivial linearisation: high R from C→E, low R B→E when forward biased; first pass treat as three large resistors
+        if (c.pins.length >= 3) {
+          resistors.push({ c, a:c.pins[0].nodeId, b:c.pins[1].nodeId, R: 1e6 }); // B-C
+          resistors.push({ c, a:c.pins[0].nodeId, b:c.pins[2].nodeId, R: 1e5 }); // B-E
+          resistors.push({ c, a:c.pins[1].nodeId, b:c.pins[2].nodeId, R: 1e3 }); // C-E
+        }
+      }
+    }
+
+    if (vsources.length === 0) { this.status = 'no_source'; this.nodeVoltages.fill(0); this._zeroCurrents(); return; }
+
+    // Two-pass diode linearisation: pass 1 treats LEDs/diodes as small R in both directions, pass 2 uses sign to decide
+    for (let pass = 0; pass < 2; pass++) {
+      const size = (n - 1) + vsources.length;
+      const A = Array.from({ length: size }, () => new Float64Array(size));
+      const b = new Float64Array(size);
+      const gnd = 0;
+      const ni = i => i - 1; // node index in matrix: node 1→row 0, etc.
+      const addR = (na, nb, G) => {
+        if (na !== gnd) A[ni(na)][ni(na)] += G;
+        if (nb !== gnd) A[ni(nb)][ni(nb)] += G;
+        if (na !== gnd && nb !== gnd) { A[ni(na)][ni(nb)] -= G; A[ni(nb)][ni(na)] -= G; }
+      };
+      for (const r of resistors) addR(r.a, r.b, 1 / r.R);
+      // Diode/LED stamp
+      const diodeStamps = ledLike.map(d => {
+        const va = d.a === gnd ? 0 : (this.nodeVoltages[d.a] || 0);
+        const vb = d.b === gnd ? 0 : (this.nodeVoltages[d.b] || 0);
+        const forward = pass === 0 ? true : (va - vb) > d.Vf * 0.5;
+        if (forward) {
+          const Rd = 1; // 1 Ω series
+          addR(d.a, d.b, 1 / Rd);
+          // Norton-equivalent RHS: current source Vf/Rd injects into anode a, withdraws from cathode b
+          if (d.a !== gnd) b[ni(d.a)] += d.Vf / Rd;
+          if (d.b !== gnd) b[ni(d.b)] -= d.Vf / Rd;
+          return { d, forward:true, Rd };
+        } else {
+          addR(d.a, d.b, 1 / 1e9);
+          return { d, forward:false, Rd:1e9 };
+        }
+      });
+      // Voltage sources
+      vsources.forEach((vs, k) => {
+        const row = (n - 1) + k;
+        if (vs.a !== gnd) { A[row][ni(vs.a)] = 1; A[ni(vs.a)][row] = 1; }
+        if (vs.b !== gnd) { A[row][ni(vs.b)] = -1; A[ni(vs.b)][row] = -1; }
+        b[row] = vs.V;
+      });
+      // Solve Ax = b via Gaussian elimination with partial pivoting
+      const x = this._gauss(A, b);
+      if (!x) { this.status = 'short'; this.nodeVoltages.fill(0); this._zeroCurrents(); return; }
+      this.nodeVoltages[0] = 0;
+      for (let i = 1; i < n; i++) this.nodeVoltages[i] = x[ni(i)];
+      // Record branch currents for resistors and diodes (for animation + readouts)
+      this.branchCurrents.clear();
+      for (const r of resistors) {
+        const va = r.a === 0 ? 0 : this.nodeVoltages[r.a];
+        const vb = r.b === 0 ? 0 : this.nodeVoltages[r.b];
+        this.branchCurrents.set(r.c.id, (va - vb) / r.R);
+      }
+      for (const s of diodeStamps) {
+        const va = s.d.a === 0 ? 0 : this.nodeVoltages[s.d.a];
+        const vb = s.d.b === 0 ? 0 : this.nodeVoltages[s.d.b];
+        const I = s.forward ? (va - vb - s.d.Vf) / s.Rd : (va - vb) / s.Rd;
+        this.branchCurrents.set(s.d.c.id, Math.max(0, I));
+      }
+      vsources.forEach((vs, k) => {
+        this.branchCurrents.set(vs.c.id, x[(n - 1) + k]);
+      });
+    }
+    // Short-circuit detection
+    for (const I of this.branchCurrents.values()) {
+      if (Math.abs(I) > CONFIG.simulation.shortCircuitThresholdA) { this.status = 'short'; return; }
+    }
+    this.status = 'ok';
+  }
+  _zeroCurrents() { for (const c of this.components) this.branchCurrents.set(c.id, 0); }
+  _gauss(A, b) {
+    const n = A.length;
+    for (let i = 0; i < n; i++) {
+      // pivot
+      let max = i;
+      for (let r = i + 1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[max][i])) max = r;
+      if (Math.abs(A[max][i]) < 1e-14) return null;
+      if (max !== i) { [A[i], A[max]] = [A[max], A[i]]; [b[i], b[max]] = [b[max], b[i]]; }
+      for (let r = i + 1; r < n; r++) {
+        const f = A[r][i] / A[i][i];
+        for (let c2 = i; c2 < n; c2++) A[r][c2] -= f * A[i][c2];
+        b[r] -= f * b[i];
+      }
+    }
+    const x = new Float64Array(n);
+    for (let i = n - 1; i >= 0; i--) {
+      let s = b[i];
+      for (let c2 = i + 1; c2 < n; c2++) s -= A[i][c2] * x[c2];
+      x[i] = s / A[i][i];
+    }
+    return x;
+  }
+}
+
+    const CATALOG = [
+      // Energy sources (power category)
+      { id:'battery_aa',  name:'AA Battery',             cat:'power', kind:'dc',      tier:'primary', defaultProps:{ V:1.5 },     range:null,          svg:'batteryAA',   env:'amber', friendly:'A small battery that can power a torch bulb.' },
+      { id:'battery_9v',  name:'9V Battery',             cat:'power', kind:'dc',      tier:'explore', defaultProps:{ V:9 },       range:null,          svg:'battery9V',   env:'amber', friendly:'A bigger battery often used in smoke alarms.' },
+      { id:'solar_panel', name:'Solar Panel',            cat:'power', kind:'dc',      tier:'explore', defaultProps:{ V:6 },       range:[0,12],        svg:'solarPanel',  env:'green', friendly:'Turns sunlight into electricity.' },
+      { id:'hand_crank',  name:'Hand Crank Generator',   cat:'power', kind:'dc',      tier:'explore', defaultProps:{ V:6 },       range:[0,24],        svg:'handCrank',   env:'green', friendly:'You spin the handle to make electricity.' },
+      { id:'firewood',    name:'Campfire Generator',     cat:'power', kind:'dc',      tier:'explore', defaultProps:{ V:0.5 },     range:[0,1.5],       svg:'firewood',    env:'amber', friendly:'Heat from a campfire makes a tiny bit of electricity.' },
+      { id:'wind_turbine',name:'Wind Turbine',           cat:'power', kind:'dc',      tier:'explore', defaultProps:{ V:12 },      range:[0,48],        svg:'windTurbine', env:'green', friendly:'Wind turns the blades to make electricity.' },
+      { id:'water_wheel', name:'Water Wheel',            cat:'power', kind:'dc',      tier:'explore', defaultProps:{ V:6 },       range:[0,12],        svg:'waterWheel',  env:'green', friendly:'Flowing water turns the wheel to make electricity.' },
+      { id:'coal_plant',  name:'Coal Power Station',     cat:'power', kind:'mains',   tier:'explore', defaultProps:{ V:230 },     range:null,          svg:'coalPlant',   env:'red',   friendly:'Burns coal. Makes lots of smoke and CO₂.' },
+      { id:'gas_plant',   name:'Gas Power Station',      cat:'power', kind:'mains',   tier:'explore', defaultProps:{ V:230 },     range:null,          svg:'gasPlant',    env:'red',   friendly:'Burns gas. Cleaner than coal but still makes CO₂.' },
+      { id:'nuclear',     name:'Nuclear Power Station',  cat:'power', kind:'mains',   tier:'explore', defaultProps:{ V:230 },     range:null,          svg:'nuclear',     env:'amber', friendly:'Very powerful — used carefully by trained adults.' },
+      { id:'solar_farm',  name:'Solar Farm',             cat:'power', kind:'mains',   tier:'explore', defaultProps:{ V:230 },     range:null,          svg:'solarFarm',   env:'green', friendly:'Thousands of solar panels together.' },
+      { id:'wind_farm',   name:'Wind Farm',              cat:'power', kind:'mains',   tier:'explore', defaultProps:{ V:230 },     range:null,          svg:'windFarm',    env:'green', friendly:'Lots of wind turbines working together.' },
+      { id:'hydro',       name:'Hydroelectric Dam',      cat:'power', kind:'mains',   tier:'explore', defaultProps:{ V:230 },     range:null,          svg:'hydro',       env:'green', friendly:'A big dam uses falling water to make electricity.' },
+      { id:'fusion',      name:'Fusion Reactor (Future!)',cat:'power',kind:'mains',   tier:'explore', defaultProps:{ V:230 },     range:null,          svg:'fusion',      env:'green', friendly:'Not widely available yet — scientists are still building these.' },
+
+      // Passive
+      { id:'resistor', name:'Resistor',   cat:'passive', kind:'r',      tier:'explore', defaultProps:{ R:220 },          range:[1,1e6],          svg:'resistor' },
+      { id:'capacitor',name:'Capacitor',  cat:'passive', kind:'c',      tier:'explore', defaultProps:{ C:1e-6 },         range:[1e-12,1],        svg:'capacitor' },
+      { id:'inductor', name:'Coil',       cat:'passive', kind:'l',      tier:'explore', defaultProps:{ L:1e-3 },         range:[1e-6,10],        svg:'inductor' },
+      { id:'fuse',     name:'Fuse',       cat:'passive', kind:'fuse',   tier:'explore', defaultProps:{ rating:1, blown:false }, range:[0.1,20],   svg:'fuse' },
+      { id:'switch',   name:'Switch',     cat:'passive', kind:'switch', tier:'primary', defaultProps:{ closed:false },   range:null,             svg:'switch' },
+      { id:'rheostat', name:'Variable Resistor', cat:'passive', kind:'r', tier:'explore', defaultProps:{ R:500 },        range:[1,10000],        svg:'rheostat' },
+
+      // Active
+      { id:'led',     name:'LED',                   cat:'active', kind:'led',   tier:'primary', defaultProps:{ colour:'red', Vf:2.0 },     range:null, svg:'led' },
+      { id:'bulb',    name:'Bulb',                  cat:'active', kind:'bulb',  tier:'primary', defaultProps:{ R:10, nominalV:6 },         range:null, svg:'bulb' },
+      { id:'buzzer',  name:'Buzzer',                cat:'active', kind:'buzzer',tier:'primary', defaultProps:{ R:50 },                      range:null, svg:'buzzer' },
+      { id:'motor',   name:'Motor',                 cat:'active', kind:'motor', tier:'primary', defaultProps:{ R:8 },                       range:null, svg:'motor' },
+      { id:'diode',   name:'Diode',                 cat:'active', kind:'diode', tier:'explore', defaultProps:{ Vf:0.7 },                    range:null, svg:'diode' },
+      { id:'npn',     name:'NPN Transistor',        cat:'active', kind:'npn',   tier:'explore', defaultProps:{ beta:100 },                  range:null, svg:'npn' },
+
+      // Measurement
+      { id:'voltmeter', name:'Voltmeter', cat:'meter', kind:'vmeter', tier:'explore', defaultProps:{}, range:null, svg:'voltmeter' },
+      { id:'ammeter',   name:'Ammeter',   cat:'meter', kind:'ameter', tier:'explore', defaultProps:{}, range:null, svg:'ammeter' },
+      { id:'ohmmeter',  name:'Ohmmeter',  cat:'meter', kind:'ometer', tier:'explore', defaultProps:{}, range:null, svg:'ohmmeter' },
+
+      // Wires (used by palette only; actual drawing handled by wire tool)
+      { id:'wire_copper',   name:'Copper Wire',    cat:'wire', kind:'wire', tier:'explore', defaultProps:{ material:'copper' },   range:null, svg:'wire' },
+      { id:'wire_nichrome', name:'Nichrome Wire',  cat:'wire', kind:'wire', tier:'explore', defaultProps:{ material:'nichrome' }, range:null, svg:'wire' },
+    ];
+    const CATALOG_BY_ID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
+
+    const FACTS = {
+      battery_aa: ['AA batteries were named in 1947.', 'One AA battery holds about 2.5 Wh of energy.', 'A lemon and two metal pins can also make a tiny battery.'],
+      battery_9v: ['A 9V battery has six tiny cells stacked inside.', 'They are often used in smoke alarms because they last a long time.'],
+      solar_panel: ['Solar panels work even on cloudy days, just less well.', 'A roof solar panel can power a kettle on a sunny day.'],
+      hand_crank: ['Hand cranks are great in emergency torches.', 'The faster you spin it, the higher the voltage.'],
+      firewood: ['This is called the thermoelectric effect — heat becomes electricity.', 'Some camping stoves can charge a phone from the fire.'],
+      wind_turbine: ['One big turbine can power hundreds of homes.', 'They spin slowly but have huge blades.'],
+      water_wheel: ['Water wheels are one of the oldest ways of using energy — over 2,000 years old!'],
+      coal_plant: ['Coal plants make a lot of carbon dioxide (CO₂).', 'Many countries are closing them down.'],
+      gas_plant: ['Gas plants can start up quickly when more power is needed.'],
+      nuclear: ['Nuclear plants make almost no CO₂.', 'One uranium pellet has the energy of a tonne of coal.'],
+      solar_farm: ['The biggest solar farms cover more land than a small town!'],
+      wind_farm: ['Offshore wind farms sit out at sea where the wind is stronger.'],
+      hydro: ['Hydroelectric dams can store energy by pumping water uphill.'],
+      fusion: ['Fusion is what powers the Sun.', 'Scientists are still trying to make it work on Earth.'],
+      resistor: ['The coloured stripes tell you its value.', 'Bigger resistors slow current down more.'],
+      capacitor: ['Capacitors store a small burst of charge.', 'Cameras use capacitors to flash the light.'],
+      inductor: ['Coils make magnetic fields when current flows.', 'They are inside speakers and microphones.'],
+      fuse: ['A fuse is a safety hero — it breaks on purpose to save the rest of the circuit.'],
+      switch: ['A light switch is the most common switch in your home.'],
+      rheostat: ['Volume dials used to be rheostats.'],
+      led: ['LED stands for Light Emitting Diode.', 'LEDs use much less energy than old bulbs.'],
+      bulb: ['Old bulbs waste most of the energy as heat, not light.'],
+      buzzer: ['Buzzers use a tiny crystal that vibrates when electricity flows.'],
+      motor: ['Every electric toy car has a tiny motor inside.'],
+      diode: ['Diodes only let current flow one way — like a one-way street.'],
+      npn: ['Transistors are the building blocks of computers.', 'A modern chip can have billions of them.'],
+      voltmeter: ['Voltmeters measure the push of electricity across two points.'],
+      ammeter: ['Ammeters measure how much current flows through a wire.'],
+      ohmmeter: ['Ohmmeters measure how hard it is for current to flow.'],
+      wire_copper: ['Copper is used because it lets electricity through really well.'],
+      wire_nichrome: ['Nichrome wire is used in toasters because it gets hot.'],
+    };
+
+    const DRAWERS = {}; // id -> function(ctx, component, opts)
+    function registerDrawer(id, fn) { DRAWERS[id] = fn; }
+
+    function defaultBodyFrame(ctx, c, label, glow = 0) {
+      const b = c.bounds();
+      if (glow > 0) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(240,165,0,'+Math.min(0.9, glow)+')';
+        ctx.shadowBlur = 18 * Math.min(1, glow);
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = c.selected ? '#2aa6b8' : '#1b2430';
+        ctx.lineWidth = c.selected ? 2 : 1.25;
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = c.selected ? '#2aa6b8' : '#1b2430';
+        ctx.lineWidth = c.selected ? 2 : 1.25;
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+      }
+      ctx.fillStyle = '#1b2430';
+      ctx.font = 'bold 13px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, c.x, c.y - b.h/2 - 8);
+    }
+
+    registerDrawer('_default', (ctx, c, { def }) => {
+      defaultBodyFrame(ctx, c, def?.name || c.type);
+    });
+
+    registerDrawer('resistor', (ctx, c) => {
+      defaultBodyFrame(ctx, c, `Resistor (${formatSI(c.props.R,'Ω')})`);
+      // zig-zag
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath();
+      const y = c.y, xs = c.x - 20, xe = c.x + 20;
+      ctx.moveTo(c.x - 30, y); ctx.lineTo(xs, y);
+      const steps = 6, amp = 7;
+      for (let i=0;i<=steps;i++) { const t=i/steps; ctx.lineTo(xs + (xe-xs)*t, y + (i%2? -amp : amp)); }
+      ctx.lineTo(c.x + 30, y);
+      ctx.stroke();
+    });
+    registerDrawer('rheostat', (ctx, c) => {
+      DRAWERS.resistor(ctx, c);
+      ctx.strokeStyle = '#2aa6b8'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(c.x-8, c.y+18); ctx.lineTo(c.x+8, c.y-18); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c.x+8, c.y-18); ctx.lineTo(c.x+3, c.y-14); ctx.lineTo(c.x+12, c.y-12); ctx.closePath(); ctx.fillStyle='#2aa6b8'; ctx.fill();
+    });
+    registerDrawer('capacitor', (ctx, c) => {
+      defaultBodyFrame(ctx, c, `Capacitor (${formatSI(c.props.C,'F')})`);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(c.x-30, c.y); ctx.lineTo(c.x-6, c.y); ctx.moveTo(c.x+6, c.y); ctx.lineTo(c.x+30, c.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c.x-6, c.y-14); ctx.lineTo(c.x-6, c.y+14); ctx.moveTo(c.x+6, c.y-14); ctx.lineTo(c.x+6, c.y+14); ctx.stroke();
+    });
+    registerDrawer('inductor', (ctx, c) => {
+      defaultBodyFrame(ctx, c, `Coil (${formatSI(c.props.L,'H')})`);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath();
+      ctx.moveTo(c.x - 30, c.y);
+      for (let i=0;i<4;i++){ const cx = c.x - 18 + i*12; ctx.arc(cx, c.y, 6, Math.PI, 0, false); }
+      ctx.moveTo(c.x + 30, c.y); ctx.lineTo(c.x + 18, c.y);
+      ctx.stroke();
+    });
+    registerDrawer('fuse', (ctx, c) => {
+      defaultBodyFrame(ctx, c, c.props.blown ? 'Fuse (blown)' : `Fuse (${c.props.rating} A)`);
+      ctx.strokeStyle = c.props.blown ? 'var(--red)' : '#1b2430'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(c.x-30, c.y); ctx.lineTo(c.x-14, c.y);
+      ctx.moveTo(c.x+14, c.y); ctx.lineTo(c.x+30, c.y);
+      ctx.stroke();
+      ctx.strokeStyle = '#1b2430';
+      ctx.strokeRect(c.x-14, c.y-6, 28, 12);
+      if (c.props.blown) {
+        ctx.strokeStyle = 'var(--red)'; ctx.beginPath(); ctx.moveTo(c.x-10, c.y-4); ctx.lineTo(c.x+10, c.y+4); ctx.stroke();
+      }
+    });
+    registerDrawer('switch', (ctx, c) => {
+      defaultBodyFrame(ctx, c, c.props.closed ? 'Switch (closed)' : 'Switch (open)');
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(c.x-30, c.y); ctx.lineTo(c.x-12, c.y);
+      ctx.moveTo(c.x+12, c.y); ctx.lineTo(c.x+30, c.y);
+      ctx.stroke();
+      ctx.beginPath();
+      if (c.props.closed) { ctx.moveTo(c.x-12, c.y); ctx.lineTo(c.x+12, c.y); }
+      else { ctx.moveTo(c.x-12, c.y); ctx.lineTo(c.x+10, c.y-12); }
+      ctx.stroke();
+      ctx.fillStyle = '#1b2430';
+      ctx.beginPath(); ctx.arc(c.x-12, c.y, 2.5, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(c.x+12, c.y, 2.5, 0, Math.PI*2); ctx.fill();
+    });
+    registerDrawer('led', (ctx, c) => {
+      const glow = clamp(Math.abs(c.state.current||0) * 200, 0, 1);
+      defaultBodyFrame(ctx, c, `LED (${c.props.colour})`, glow);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath(); ctx.moveTo(c.x-30, c.y); ctx.lineTo(c.x-8, c.y);
+      ctx.moveTo(c.x+8, c.y); ctx.lineTo(c.x+30, c.y); ctx.stroke();
+      // triangle
+      ctx.beginPath(); ctx.moveTo(c.x-8, c.y-10); ctx.lineTo(c.x-8, c.y+10); ctx.lineTo(c.x+8, c.y); ctx.closePath();
+      ctx.fillStyle = glow > 0.05 ? c.props.colour : '#fff'; ctx.fill(); ctx.stroke();
+      // cathode bar
+      ctx.beginPath(); ctx.moveTo(c.x+8, c.y-10); ctx.lineTo(c.x+8, c.y+10); ctx.stroke();
+      // arrows
+      ctx.strokeStyle = '#1b2430'; ctx.beginPath();
+      ctx.moveTo(c.x-2, c.y-14); ctx.lineTo(c.x+3, c.y-19); ctx.moveTo(c.x+1, c.y-19); ctx.lineTo(c.x+5, c.y-17);
+      ctx.stroke();
+    });
+    registerDrawer('bulb', (ctx, c) => {
+      const I = Math.abs(c.state.current||0);
+      const Vnom = c.props.nominalV || 6;
+      const brightness = clamp(I * c.props.R / Vnom, 0, 1);
+      defaultBodyFrame(ctx, c, 'Bulb', brightness);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 14, 0, Math.PI*2); ctx.stroke();
+      ctx.fillStyle = brightness > 0.05 ? `rgba(255,220,120,${brightness})` : '#fff';
+      ctx.fill();
+      ctx.beginPath(); ctx.moveTo(c.x-8, c.y-6); ctx.lineTo(c.x+8, c.y+6); ctx.moveTo(c.x+8, c.y-6); ctx.lineTo(c.x-8, c.y+6); ctx.stroke();
+    });
+    registerDrawer('buzzer', (ctx, c) => {
+      defaultBodyFrame(ctx, c, 'Buzzer');
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 12, 0, Math.PI*2); ctx.stroke();
+      ctx.fillStyle = '#1b2430'; ctx.font = '16px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('♪', c.x, c.y+5);
+    });
+    registerDrawer('motor', (ctx, c) => {
+      defaultBodyFrame(ctx, c, 'Motor');
+      const t = nowSec();
+      const I = Math.abs(c.state.current||0);
+      const spin = I * 12 * t;
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(spin);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(10, 0); ctx.moveTo(8, -3); ctx.lineTo(10, 0); ctx.lineTo(8, 3); ctx.stroke();
+      ctx.restore();
+    });
+    registerDrawer('diode', (ctx, c) => {
+      defaultBodyFrame(ctx, c, 'Diode');
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath(); ctx.moveTo(c.x-30, c.y); ctx.lineTo(c.x-8, c.y);
+      ctx.moveTo(c.x+8, c.y); ctx.lineTo(c.x+30, c.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c.x-8, c.y-10); ctx.lineTo(c.x-8, c.y+10); ctx.lineTo(c.x+8, c.y); ctx.closePath();
+      ctx.fillStyle = '#fff'; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c.x+8, c.y-10); ctx.lineTo(c.x+8, c.y+10); ctx.stroke();
+    });
+    registerDrawer('npn', (ctx, c) => {
+      defaultBodyFrame(ctx, c, 'NPN');
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.75;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 14, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c.x-8, c.y-10); ctx.lineTo(c.x-8, c.y+10); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c.x-30, c.y); ctx.lineTo(c.x-8, c.y); ctx.stroke();              // base
+      ctx.beginPath(); ctx.moveTo(c.x-8, c.y-6); ctx.lineTo(c.x+12, c.y-14); ctx.lineTo(c.x+12, c.y-24); ctx.stroke(); // collector
+      ctx.beginPath(); ctx.moveTo(c.x-8, c.y+6); ctx.lineTo(c.x+12, c.y+14); ctx.lineTo(c.x+12, c.y+24); ctx.stroke(); // emitter
+      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('B', c.x-28, c.y-4); ctx.fillText('C', c.x+14, c.y-18); ctx.fillText('E', c.x+14, c.y+22);
+    });
+
+    function powerFrame(ctx, c, title, badge=null) {
+      const b = c.bounds();
+      ctx.fillStyle = '#fff';
+      ctx.strokeStyle = c.selected ? '#2aa6b8' : '#1b2430';
+      ctx.lineWidth = c.selected ? 2 : 1.25;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(title, c.x, c.y - b.h/2 - 8);
+      if (badge) {
+        ctx.fillStyle = badge.bg; ctx.strokeStyle = badge.bg;
+        ctx.beginPath(); ctx.arc(c.x + b.w/2 - 8, c.y - b.h/2 + 8, 6, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 8px system-ui';
+        ctx.fillText(badge.text, c.x + b.w/2 - 8, c.y - b.h/2 + 11);
+      }
+    }
+    function cellSymbol(ctx, cx, cy, big=false){
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx-30, cy); ctx.lineTo(cx-6, cy);
+      ctx.moveTo(cx+6, cy); ctx.lineTo(cx+30, cy);
+      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx-6, cy-10); ctx.lineTo(cx-6, cy+10); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx+6, cy-(big?16:6)); ctx.lineTo(cx+6, cy+(big?16:6)); ctx.stroke();
+    }
+    registerDrawer('battery_aa', (ctx, c) => { powerFrame(ctx, c, `AA (${c.props.V} V)`); cellSymbol(ctx, c.x, c.y); });
+    registerDrawer('battery_9v', (ctx, c) => { powerFrame(ctx, c, `9V (${c.props.V} V)`); cellSymbol(ctx, c.x, c.y, true); });
+
+    registerDrawer('solar_panel', (ctx, c) => {
+      powerFrame(ctx, c, `Solar (${c.props.V.toFixed(1)} V)`, { bg:'#2fa767', text:'✓' });
+      ctx.fillStyle = '#3a77c9'; ctx.fillRect(c.x-22, c.y-10, 44, 20);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+      for (let i=-1;i<=1;i++){ ctx.beginPath(); ctx.moveTo(c.x-22+ (i+1)*22, c.y-10); ctx.lineTo(c.x-22+(i+1)*22, c.y+10); ctx.stroke(); }
+      ctx.beginPath(); ctx.moveTo(c.x-22, c.y); ctx.lineTo(c.x+22, c.y); ctx.stroke();
+    });
+
+    registerDrawer('hand_crank', (ctx, c) => {
+      powerFrame(ctx, c, `Crank (${c.props.V.toFixed(1)} V)`, { bg:'#2fa767', text:'✓' });
+      const t = nowSec() * (c.state.current? 3 : 1);
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(t);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(14,0); ctx.stroke();
+      ctx.restore();
+    });
+
+    registerDrawer('firewood', (ctx, c) => {
+      powerFrame(ctx, c, `Campfire (${c.props.V.toFixed(1)} V)`, { bg:'#f0a500', text:'!' });
+      const t = nowSec()*1000/350;
+      ctx.fillStyle = `rgba(240,120,40,${0.5 + 0.4*Math.sin(t)})`;
+      ctx.beginPath(); ctx.moveTo(c.x-10, c.y+10); ctx.quadraticCurveTo(c.x, c.y-14, c.x+10, c.y+10); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#5a3a1f'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(c.x-14, c.y+14); ctx.lineTo(c.x+14, c.y+14); ctx.stroke();
+    });
+
+    registerDrawer('wind_turbine', (ctx, c) => {
+      powerFrame(ctx, c, `Wind (${c.props.V.toFixed(0)} V)`, { bg:'#2fa767', text:'✓' });
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(c.x, c.y+14); ctx.lineTo(c.x, c.y-4); ctx.stroke();
+      const t = nowSec()*1000/120;
+      ctx.save(); ctx.translate(c.x, c.y-4); ctx.rotate(t);
+      for (let i=0;i<3;i++){ ctx.save(); ctx.rotate(i*2*Math.PI/3); ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0,-14); ctx.stroke(); ctx.restore(); }
+      ctx.restore();
+    });
+
+    registerDrawer('water_wheel', (ctx, c) => {
+      powerFrame(ctx, c, `Water Wheel (${c.props.V.toFixed(0)} V)`, { bg:'#2fa767', text:'✓' });
+      const t = nowSec()*1000/600;
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(t);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.stroke();
+      for (let i=0;i<6;i++){ ctx.save(); ctx.rotate(i*Math.PI/3); ctx.beginPath(); ctx.moveTo(0,-12); ctx.lineTo(0,-6); ctx.stroke(); ctx.restore(); }
+      ctx.restore();
+    });
+
+    function chimneyDrawer(ctx, c, emission){
+      const t = nowSec()*1000/400;
+      ctx.fillStyle = '#9aa5b2';
+      ctx.fillRect(c.x-10, c.y-4, 6, 16);
+      ctx.fillStyle = emission;
+      for (let i=0;i<3;i++){ ctx.beginPath(); ctx.arc(c.x-7, c.y-12 - i*6 + Math.sin(t+i)*1.5, 5 - i*0.7, 0, Math.PI*2); ctx.fill(); }
+      ctx.fillStyle = '#7a8696'; ctx.fillRect(c.x-2, c.y-4, 18, 16);
+    }
+    registerDrawer('coal_plant', (ctx, c) => { powerFrame(ctx, c, `Coal (${c.props.V} V)`, { bg:'#d9534f', text:'✗' }); chimneyDrawer(ctx, c, 'rgba(50,50,50,0.8)'); });
+    registerDrawer('gas_plant',  (ctx, c) => { powerFrame(ctx, c, `Gas (${c.props.V} V)`,  { bg:'#d9534f', text:'✗' }); chimneyDrawer(ctx, c, 'rgba(140,140,160,0.7)'); });
+
+    registerDrawer('nuclear', (ctx, c) => {
+      powerFrame(ctx, c, `Nuclear (${c.props.V} V)`, { bg:'#f0a500', text:'!' });
+      // cooling tower
+      ctx.fillStyle = '#ccd3dc';
+      ctx.beginPath();
+      ctx.moveTo(c.x-12, c.y+14); ctx.lineTo(c.x-8, c.y-12); ctx.lineTo(c.x+8, c.y-12); ctx.lineTo(c.x+12, c.y+14); ctx.closePath();
+      ctx.fill(); ctx.strokeStyle = '#1b2430'; ctx.stroke();
+      ctx.fillStyle = '#f0a500'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('☢', c.x, c.y+4);
+    });
+
+    registerDrawer('solar_farm', (ctx, c) => {
+      powerFrame(ctx, c, `Solar Farm (${c.props.V} V)`, { bg:'#2fa767', text:'✓' });
+      ctx.fillStyle = '#3a77c9';
+      for (let i=0;i<3;i++) for (let j=0;j<2;j++) ctx.fillRect(c.x-22+i*16, c.y-8+j*10, 12, 8);
+    });
+    registerDrawer('wind_farm', (ctx, c) => {
+      powerFrame(ctx, c, `Wind Farm (${c.props.V} V)`, { bg:'#2fa767', text:'✓' });
+      const t = nowSec()*1000/120;
+      for (let i=-1;i<=1;i++){
+        const cx = c.x + i*14; const cy = c.y+2;
+        ctx.strokeStyle = '#1b2430'; ctx.beginPath(); ctx.moveTo(cx, cy+10); ctx.lineTo(cx, cy-2); ctx.stroke();
+        ctx.save(); ctx.translate(cx, cy-2); ctx.rotate(t + i);
+        for (let k=0;k<3;k++){ ctx.save(); ctx.rotate(k*2*Math.PI/3); ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0,-8); ctx.stroke(); ctx.restore(); }
+        ctx.restore();
+      }
+    });
+    registerDrawer('hydro', (ctx, c) => {
+      powerFrame(ctx, c, `Hydro (${c.props.V} V)`, { bg:'#2fa767', text:'✓' });
+      ctx.fillStyle = '#3a77c9'; ctx.fillRect(c.x-22, c.y-4, 20, 14);
+      ctx.fillStyle = '#9aa5b2'; ctx.beginPath();
+      ctx.moveTo(c.x-2, c.y-8); ctx.lineTo(c.x+4, c.y-12); ctx.lineTo(c.x+22, c.y+10); ctx.lineTo(c.x-2, c.y+10); ctx.closePath(); ctx.fill();
+    });
+    registerDrawer('fusion', (ctx, c) => {
+      powerFrame(ctx, c, `Fusion (${c.props.V} V) — Future!`, { bg:'#2fa767', text:'✓' });
+      const t = nowSec()*1000/500;
+      ctx.strokeStyle = '#2aa6b8'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(c.x, c.y, 16, 8, t, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(c.x, c.y, 8, 16, t, 0, Math.PI*2); ctx.stroke();
+    });
+
+    function meterFrame(ctx, c, label, readout){
+      defaultBodyFrame(ctx, c, label);
+      ctx.strokeStyle = '#1b2430'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 14, 0, Math.PI*2); ctx.stroke();
+      ctx.fillStyle = '#1b2430'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(readout, c.x, c.y+4);
+    }
+    registerDrawer('voltmeter', (ctx, c) => meterFrame(ctx, c, 'Voltmeter', formatSI(c.state.voltageAcross||0, 'V')));
+    registerDrawer('ammeter',   (ctx, c) => meterFrame(ctx, c, 'Ammeter',   formatSI(c.state.current||0, 'A')));
+    registerDrawer('ohmmeter',  (ctx, c) => {
+      // Ohmmeter reads R = V / I across its probes when probed against an unpowered sub-circuit. For the primary-level simplification we compute as |V/I| if finite else '—'.
+      const V = Math.abs(c.state.voltageAcross||0);
+      const I = Math.abs(c.state.current||1e-15);
+      const R = V/I;
+      meterFrame(ctx, c, 'Ohmmeter', isFinite(R) && R > 0 ? formatSI(R, 'Ω') : '—');
+    });
+
+    class AudioBus {
+      constructor() {
+        this.ctx = null; this.osc = null; this.gain = null;
+      }
+      _ensure() {
+        if (this.ctx) return;
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        this.ctx = new AC();
+        this.osc = this.ctx.createOscillator();
+        this.gain = this.ctx.createGain();
+        this.osc.frequency.value = CONFIG.audio.buzzerHz;
+        this.gain.gain.value = 0;
+        this.osc.connect(this.gain).connect(this.ctx.destination);
+        this.osc.start();
+      }
+      setBuzzer(on) {
+        this._ensure();
+        if (!this.gain) return;
+        const target = on ? CONFIG.audio.buzzerGain : 0;
+        this.gain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.03);
+      }
+    }
+
+    class PropertyPanel {
+  constructor(host, app) { this.host = host; this.app = app; }
+  render() {
+    const h = this.host;
+    h.textContent = '';
+    const sel = this.app.selected;
+    if (!sel) {
+      const p = document.createElement('p');
+      p.style.cssText = 'color:var(--muted); font-size:16px; line-height:1.5';
+      p.textContent = 'Tap a component to see what it does. Drag parts from the left onto the board!';
+      h.append(p);
+      return;
+    }
+    const def = CATALOG_BY_ID[sel.type];
+    const isPrimary = def.tier === 'primary';
+    const title = document.createElement('h2');
+    title.textContent = def.name;
+    title.style.cssText = 'margin:0 0 6px; font-size:22px; font-weight:700';
+    const desc = document.createElement('p');
+    desc.style.cssText = 'margin:0 0 12px; color:var(--muted); font-size:16px; line-height:1.5';
+    desc.textContent = def.friendly || '';
+    h.append(title, desc);
+
+    if (def.kind === 'mains') {
+      const warn = document.createElement('div');
+      warn.style.cssText = 'padding:12px; background:#fff3d6; border-left:4px solid var(--amber); border-radius:10px; font-size:16px; line-height:1.5; margin-bottom:12px';
+      warn.textContent = 'Mains electricity is very powerful and dangerous. Only adults should work with it!';
+      h.append(warn);
+    }
+    const props = document.createElement('div');
+    props.style.cssText = 'display:flex; flex-direction:column; gap:8px';
+    if (def.defaultProps.V !== undefined && def.range) {
+      props.append(this._slider('Voltage', 'V', def.range[0], def.range[1], 0.1, sel, 'V'));
+    }
+    if (def.kind === 'r' || def.id === 'rheostat') {
+      props.append(this._slider('Resistance', '\u03A9', def.range[0], def.range[1], 1, sel, 'R', true));
+    }
+    if (def.kind === 'c') props.append(this._slider('Capacitance', 'F', def.range[0], def.range[1], 1e-12, sel, 'C', true));
+    if (def.kind === 'l') props.append(this._slider('Inductance', 'H', def.range[0], def.range[1], 1e-6, sel, 'L', true));
+    if (def.kind === 'fuse') props.append(this._slider('Rating', 'A', def.range[0], def.range[1], 0.1, sel, 'rating'));
+    if (def.kind === 'led') props.append(this._select('Colour', ['red','green','blue','white','yellow'], sel, 'colour'));
+    if (def.kind === 'switch') props.append(this._toggle('Switch is ON', sel, 'closed'));
+    h.append(props);
+
+    if (def.kind === 'c') {
+      const note = document.createElement('div');
+      note.style.cssText = 'padding:10px; background:var(--bg); border-left:4px solid var(--accent); border-radius:8px; font-size:15px; color:var(--muted); margin:10px 0; line-height:1.4';
+      note.textContent = 'A capacitor stores a small amount of electricity, then stops letting more through.';
+      h.append(note);
+    }
+    if (def.kind === 'l') {
+      const note = document.createElement('div');
+      note.style.cssText = 'padding:10px; background:var(--bg); border-left:4px solid var(--accent); border-radius:8px; font-size:15px; color:var(--muted); margin:10px 0; line-height:1.4';
+      note.textContent = 'A coil lets electricity flow through it like a wire, but it also creates a magnetic field!';
+      h.append(note);
+    }
+    const read = document.createElement('div');
+    read.style.cssText = 'margin-top:14px; padding:12px; background:var(--bg); border-radius:10px; display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; font-size:16px; line-height:1.4';
+    const mk = (k,v) => { const a = document.createElement('span'); a.textContent = k; a.style.cssText = 'color:var(--muted);font-weight:600'; const b = document.createElement('span'); b.textContent = v; b.style.fontVariantNumeric='tabular-nums'; read.append(a,b); };
+    if (isPrimary) {
+      const cur = Math.abs(sel.state.current||0);
+      let fd; if (cur < 1e-6) fd = 'None'; else if (cur < 0.01) fd = 'A tiny bit'; else if (cur < 0.1) fd = 'A little'; else if (cur < 1) fd = 'A good amount'; else fd = 'A lot!';
+      mk('Electricity flowing', fd);
+      const pw = Math.abs(sel.state.power||0);
+      let pd; if (pw < 1e-6) pd = 'Nothing happening'; else if (pw < 0.1) pd = 'A little energy used'; else if (pw < 1) pd = 'Some energy used'; else pd = 'Lots of energy!';
+      mk('Energy used', pd);
+    } else {
+      mk('Current', formatSI(sel.state.current||0,'A'));
+      mk('Voltage', formatSI(sel.state.voltageAcross||0,'V'));
+      mk('Power', formatSI(sel.state.power||0,'W'));
+    }
+    h.append(read);
+
+    const fact = document.createElement('div');
+    fact.style.cssText = 'margin-top:14px; padding:12px; border-left:4px solid var(--accent); background:#fff; border-radius:8px; font-size:16px; line-height:1.5';
+    const fTitle = document.createElement('strong'); fTitle.textContent = 'Did you know? ';
+    const list = FACTS[sel.type] || ['Every circuit needs a complete loop for current to flow.'];
+    fact.append(fTitle, document.createTextNode(list[Math.floor(Math.random()*list.length)]));
+    h.append(fact);
+
+    const trash = document.createElement('button');
+    trash.className = 'btn';
+    trash.style.cssText = 'margin-top:12px; width:100%; border-color:var(--red); color:var(--red); min-height:48px; font-size:16px';
+    trash.setAttribute('aria-label', 'Remove this component');
+    trash.textContent = '\u{1F5D1}  Remove component';
+    trash.addEventListener('click', () => this.app.remove(sel));
+    h.append(trash);
+  }
+  _slider(label, unit, min, max, step, sel, key, log=false) {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex; flex-direction:column; gap:6px; font-size:16px; line-height:1.4';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex; justify-content:space-between';
+    const lab = document.createElement('span'); lab.textContent = label;
+    const val = document.createElement('span'); val.textContent = formatSI(sel.props[key], unit);
+    head.append(lab, val);
+    const inp = document.createElement('input');
+    inp.type = 'range';
+    inp.style.cssText = 'height:28px; cursor:pointer';
+    if (log) {
+      inp.min = '0'; inp.max = '1000'; inp.step = '1';
+      const cur = (Math.log(sel.props[key]/min)/Math.log(max/min))*1000;
+      inp.value = String(clamp(cur,0,1000));
+      inp.addEventListener('input', () => {
+        const t = Number(inp.value)/1000;
+        const v = min * Math.pow(max/min, t);
+        sel.props[key] = v; val.textContent = formatSI(v, unit); this.app.onPropertyChanged();
+      });
+    } else {
+      inp.min = String(min); inp.max = String(max); inp.step = String(step); inp.value = String(sel.props[key]);
+      inp.addEventListener('input', () => { sel.props[key] = Number(inp.value); val.textContent = formatSI(sel.props[key], unit); this.app.onPropertyChanged(); });
+    }
+    row.append(head, inp);
+    return row;
+  }
+  _select(label, options, sel, key) {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex; flex-direction:column; gap:6px; font-size:16px; line-height:1.4';
+    const lab = document.createElement('span'); lab.textContent = label;
+    const s = document.createElement('select');
+    s.style.cssText = 'padding:8px; border-radius:8px; border:1px solid var(--grid); font:inherit; font-size:16px';
+    for (const o of options) { const op = document.createElement('option'); op.value = o; op.textContent = o; s.append(op); }
+    s.value = sel.props[key];
+    s.addEventListener('change', () => { sel.props[key] = s.value; this.app.onPropertyChanged(); });
+    row.append(lab, s);
+    return row;
+  }
+  _toggle(label, sel, key) {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex; align-items:center; gap:10px; font-size:16px; line-height:1.4; cursor:pointer';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!sel.props[key];
+    cb.style.cssText = 'width:22px; height:22px; cursor:pointer';
+    cb.addEventListener('change', () => { sel.props[key] = cb.checked; this.app.onPropertyChanged(); });
+    const lab = document.createElement('span'); lab.textContent = label;
+    row.append(cb, lab);
+    return row;
+  }
+}
+
+    class Toolbar {
+      constructor(host, app) { this.host = host; this.app = app; }
+      render() {
+        const h = this.host; h.textContent = '';
+        const group = () => { const g = document.createElement('div'); g.style.cssText = 'display:flex; gap:8px; align-items:center'; return g; };
+        const btn = (emoji, label, title, onClick, { primary=false, pressed=false } = {}) => {
+          const b = document.createElement('button');
+          b.className = 'btn' + (primary ? ' primary' : '');
+          b.style.cssText = 'display:flex;align-items:center;gap:6px;padding:8px 12px;min-height:48px;font-size:15px';
+          b.textContent = emoji + ' ' + label;
+          b.title = title; b.setAttribute('aria-label', title);
+          if (pressed) b.setAttribute('aria-pressed', 'true');
+          b.addEventListener('click', onClick);
+          return b;
+        };
+        const left = group();
+        const mkTool = (id, emoji, label, title) => {
+          const b = btn(emoji, label, title, () => { this.app.setTool(id); this.render(); }, { pressed: this.app.tool === id });
+          if (this.app.tool === id) b.classList.add('primary');
+          return b;
+        };
+        left.append(mkTool('select', '\u{1F5B1}', 'Select', 'Select / move (V)'));
+        left.append(mkTool('wire', '\u23AF', 'Wire', 'Wire tool (W)'));
+        left.append(mkTool('delete', '\u{1F5D1}', 'Delete', 'Delete tool (D)'));
+        const centre = group();
+        centre.style.marginLeft = 'auto';
+        const running = this.app.running !== false;
+        centre.append(btn(running ? '\u23F8' : '\u25B6', running ? 'Pause' : 'Run', running ? 'Pause (Space)' : 'Run (Space)', () => {
+          this.app.running = !running;
+          TIME.freeze = this.app.running ? null : performance.now()/1000;
+          this.render();
+        }, { primary: !running }));
+        centre.append(btn('\u{1F9F9}', 'Clear', 'Remove everything', () => this.app.confirmClearBoard()));
+        const right = group();
+        right.style.marginLeft = 'auto';
+        right.append(btn('\u26A1', 'Compare', 'Compare power sources', () => this.app.compare?.open()));
+        right.append(btn('\u2753', 'Help', 'Show tour', () => this.app.tour?.start(true)));
+        const moreWrap = document.createElement('div');
+        moreWrap.style.position = 'relative';
+        const moreBtn = document.createElement('button');
+        moreBtn.className = 'btn';
+        moreBtn.style.cssText = 'display:flex;align-items:center;gap:6px;padding:8px 12px;min-height:48px;font-size:15px';
+        moreBtn.textContent = '\u22EF More';
+        const moreMenu = document.createElement('div');
+        moreMenu.style.cssText = 'display:none;position:absolute;right:0;top:100%;background:var(--panel);border:1px solid var(--grid);border-radius:10px;box-shadow:var(--shadow);padding:6px;z-index:10;min-width:180px';
+        const mi = (emoji, label, fn) => {
+          const m = document.createElement('button');
+          m.className = 'btn';
+          m.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;border:none;font-size:15px;padding:10px 12px;min-height:44px';
+          m.textContent = emoji + ' ' + label;
+          m.addEventListener('click', () => { fn(); moreMenu.style.display = 'none'; });
+          return m;
+        };
+        moreMenu.append(mi('\u{1F4BE}', 'Save Circuit', () => this.app.storage?.saveFile()));
+        moreMenu.append(mi('\u{1F4C2}', 'Load Circuit', () => this.app.storage?.loadFile()));
+        moreMenu.append(mi('\u{1F517}', 'Share Link', () => this.app.storage?.share()));
+        moreMenu.append(mi('\u2922', 'Zoom to Fit', () => this.app.zoomToFit()));
+        moreMenu.append(mi('\u21BA', 'Reset Circuit', () => this.app.resetSim()));
+        moreBtn.addEventListener('click', e => { e.stopPropagation(); moreMenu.style.display = moreMenu.style.display === 'none' ? 'block' : 'none'; });
+        document.addEventListener('click', () => moreMenu.style.display = 'none');
+        moreWrap.append(moreBtn, moreMenu);
+        right.append(moreWrap);
+        h.append(left, centre, right);
+      }
+    }
+
+    class Storage {
+      constructor(app) { this.app = app; }
+      toObj() {
+        return {
+          v: 1,
+          components: this.app.components.map(c => ({
+            id: c.id, type: c.type, x: c.x, y: c.y, props: c.props,
+            pinIds: c.pins.map(p => p.id)
+          })),
+          wires: this.app.wires.map(w => ({
+            id: w.id, colour: w.colour,
+            a: w.a.id, b: w.b.id
+          })),
+        };
+      }
+      fromObj(obj) {
+        if (!obj || obj.v !== 1) throw new Error('bad version');
+        this.app.components = []; this.app.wires = []; this.app.selected = null;
+        const pinById = new Map();
+        for (const cc of obj.components) {
+          const comp = new Component(cc.type, cc.x, cc.y);
+          comp.id = cc.id; comp.props = cc.props || {};
+          const def = CATALOG_BY_ID[cc.type];
+          if (def.kind === 'npn') comp.pins.push(new Pin(comp, -30, 0, 'B'), new Pin(comp, 12, -24, 'C'), new Pin(comp, 12, 24, 'E'));
+          else comp.pins.push(new Pin(comp, -30, 0, 'A'), new Pin(comp, 30, 0, 'B'));
+          // overwrite auto-generated pin ids with saved ones
+          comp.pins.forEach((p, i) => { p.id = cc.pinIds[i] || p.id; pinById.set(p.id, p); });
+          this.app.components.push(comp);
+        }
+        for (const ww of obj.wires) {
+          const a = pinById.get(ww.a), b = pinById.get(ww.b);
+          if (!a || !b) continue;
+          const w = new Wire(a, b, ww.colour);
+          w.id = ww.id;
+          this.app.wires.push(w);
+        }
+        this.app.onTopologyChanged();
+      }
+      saveFile() {
+        const json = JSON.stringify(this.toObj(), null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'my-circuit.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        this.app.toast('Circuit saved.', 'success');
+      }
+      loadFile() {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'application/json';
+        inp.addEventListener('change', () => {
+          const f = inp.files?.[0]; if (!f) return;
+          const r = new FileReader();
+          r.onload = () => { try { this.fromObj(JSON.parse(r.result)); this.app.toast('Circuit loaded.', 'success'); } catch(e) { this.app.toast('Hmm, that file didn\u2019t work.', 'error'); } };
+          r.readAsText(f);
+        });
+        inp.click();
+      }
+      share() {
+        const json = JSON.stringify(this.toObj());
+        const b64 = btoa(unescape(encodeURIComponent(json)));
+        const url = location.origin + location.pathname + CONFIG.storage.shareHashPrefix + b64;
+        navigator.clipboard?.writeText(url).then(
+          () => this.app.toast('Link copied to clipboard.', 'success'),
+          () => this.app.toast('Copy failed \u2014 link is in the URL bar.', 'warn')
+        );
+        history.replaceState(null, '', CONFIG.storage.shareHashPrefix + b64);
+      }
+      loadFromHash() {
+        const h = location.hash;
+        if (!h || !h.startsWith(CONFIG.storage.shareHashPrefix)) return false;
+        try {
+          const b64 = h.slice(CONFIG.storage.shareHashPrefix.length);
+          const json = decodeURIComponent(escape(atob(b64)));
+          this.fromObj(JSON.parse(json));
+          return true;
+        } catch { return false; }
+      }
+    }
+
+    class CompareOverlay {
+      constructor(app) { this.app = app; this.host = $('#overlay'); }
+      open() {
+        const ov = this.host; ov.textContent = '';
+        const sheet = document.createElement('div'); sheet.className = 'sheet'; sheet.style.width = '700px';
+        const title = document.createElement('h2'); title.textContent = 'Compare Power Sources'; title.style.marginTop='0';
+        sheet.append(title);
+        const sources = this.app.components.filter(c => CATALOG_BY_ID[c.type].cat === 'power');
+        if (sources.length === 0) {
+          const p = document.createElement('p'); p.textContent = 'Add some power sources to the board first.';
+          sheet.append(p);
+        } else {
+          const table = document.createElement('table');
+          table.style.cssText = 'width:100%; border-collapse:collapse; font-size:14px';
+          const head = document.createElement('tr');
+          ['Name','Type','How much power','Good for the planet?','Fun fact'].forEach(h => {
+            const th = document.createElement('th'); th.textContent = h;
+            th.style.cssText = 'text-align:left; padding:6px 8px; border-bottom:1px solid var(--grid); color:var(--muted); font-weight:600';
+            head.append(th);
+          });
+          table.append(head);
+          const envMap = { green:{ bg:'#2fa767', icon:'✓', label:'Renewable' }, amber:{ bg:'#f0a500', icon:'!', label:'Some concerns' }, red:{ bg:'#d9534f', icon:'✗', label:'Non-renewable' } };
+          for (const s of sources) {
+            const def = CATALOG_BY_ID[s.type];
+            const tr = document.createElement('tr');
+            const td = t => { const d = document.createElement('td'); d.style.cssText='padding:6px 8px; border-bottom:1px solid var(--grid); vertical-align:top'; d.append(t); return d; };
+            tr.append(td(document.createTextNode(def.name)));
+            tr.append(td(document.createTextNode(def.kind === 'mains' ? 'Mains' : (def.kind === 'dc' ? 'Battery/DC' : def.kind))));
+            tr.append(td(document.createTextNode(`${s.props.V} V`)));
+            const e = envMap[def.env || 'amber'];
+            const badge = document.createElement('span');
+            badge.style.cssText = `display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:999px; background:${e.bg}; color:#fff; font-size:12px`;
+            badge.textContent = `${e.icon} ${e.label}`;
+            tr.append(td(badge));
+            const fact = (FACTS[def.id] || ['Electricity is useful everywhere.'])[0];
+            tr.append(td(document.createTextNode(fact)));
+            table.append(tr);
+          }
+          sheet.append(table);
+          // canvas bar chart
+          const cv = document.createElement('canvas');
+          cv.width = 680; cv.height = 220;
+          cv.style.cssText = 'width:100%; height:220px; margin-top:16px';
+          sheet.append(cv);
+          this._drawChart(cv, sources);
+        }
+        const row = document.createElement('div'); row.style.cssText='text-align:right; margin-top:12px';
+        const close = document.createElement('button'); close.className='btn primary'; close.textContent='Close';
+        close.onclick = () => ov.classList.remove('show');
+        row.append(close); sheet.append(row); ov.append(sheet); ov.classList.add('show');
+      }
+      _drawChart(cv, sources) {
+        const c = cv.getContext('2d'); const W = cv.width, H = cv.height;
+        c.clearRect(0,0,W,H);
+        c.fillStyle = '#1b2430'; c.font='12px system-ui';
+        const maxV = Math.max(...sources.map(s => s.props.V), 1);
+        const bw = (W - 40) / sources.length;
+        sources.forEach((s, i) => {
+          const def = CATALOG_BY_ID[s.type];
+          const h = (s.props.V / maxV) * (H - 60);
+          c.fillStyle = def.env==='green'?'#2fa767':def.env==='red'?'#d9534f':'#f0a500';
+          c.fillRect(20 + i*bw + 6, H - 30 - h, bw - 12, h);
+          c.fillStyle = '#1b2430';
+          c.save(); c.translate(20 + i*bw + bw/2, H - 8); c.rotate(-0.35); c.textAlign='right';
+          c.fillText(def.name, 0, 0); c.restore();
+          c.textAlign='center';
+          c.fillText(`${s.props.V}V`, 20 + i*bw + bw/2, H - 34 - h);
+        });
+      }
+    }
+
+    class Tour {
+      constructor(app) {
+        this.app = app;
+        this.steps = [
+          { target: null, title:'Welcome! Let\u2019s make a circuit!', text:'Building circuits is fun! Follow these steps and you\u2019ll have a working circuit in no time.' },
+          { target: '#sidebar [data-id="battery_aa"]', title:'Step 1: Grab a battery', text:'Drag the AA Battery onto the board. The battery gives your circuit energy!' },
+          { target: '#sidebar [data-id="bulb"]', title:'Step 2: Pick something to power', text:'Drag a Bulb next to the battery. This is what the electricity will make work!' },
+          { target: '#board', title:'Step 3: Connect with wires', action:'wire-tool', text:'Click the Wire tool (or press W). Then click a dot on the battery and a dot on the bulb. Do both sides!' },
+          { target: null, title:'Amazing! You built a circuit!', text:'If everything is connected in a loop, the bulb lights up! The moving dots show electricity flowing around.' },
+        ];
+        this.i = 0;
+        this.bubble = null;
+      }
+      start(force = false) {
+        if (!force && localStorage.getItem(CONFIG.storage.tourKey)) return;
+        this.i = 0; this._show();
+      }
+      _show() {
+        this._clear();
+        const step = this.steps[this.i]; if (!step) return this._end();
+        if (step.action === 'wire-tool') { this.app.setTool('wire'); this.app.toolbar?.render(); }
+        const bubble = document.createElement('div');
+        bubble.className = 'tour-bubble';
+        const h = document.createElement('h3'); h.textContent = step.title;
+        const p = document.createElement('p'); p.textContent = step.text; p.style.margin='0';
+        const row = document.createElement('div'); row.className = 'row';
+        const skip = document.createElement('button'); skip.className='btn'; skip.textContent='Skip'; skip.style.cssText='min-height:44px;min-width:80px;font-size:16px';
+        const next = document.createElement('button'); next.className='btn primary'; next.textContent = (this.i === this.steps.length-1) ? 'Finish' : 'Next'; next.style.cssText='min-height:44px;min-width:80px;font-size:16px';
+        skip.onclick = () => this._end();
+        next.onclick = () => { this.i++; this._show(); };
+        row.append(skip, next); bubble.append(h, p, row); document.body.append(bubble); this.bubble = bubble;
+        if (step.target) {
+          const el = document.querySelector(step.target);
+          if (el) {
+            el.classList.add('tour-hl'); this._target = el;
+            const r = el.getBoundingClientRect();
+            bubble.style.left = Math.min(window.innerWidth - 340, r.right + 12) + 'px';
+            bubble.style.top = Math.max(16, r.top) + 'px';
+            return;
+          }
+        }
+        bubble.style.left = (window.innerWidth/2 - 160) + 'px';
+        bubble.style.top = '80px';
+      }
+      _clear() {
+        if (this._target) this._target.classList.remove('tour-hl');
+        this._target = null;
+        if (this.bubble) this.bubble.remove(); this.bubble = null;
+      }
+      _end() { this._clear(); localStorage.setItem(CONFIG.storage.tourKey, '1'); }
+    }
+
+    class App {
+      constructor() {
+        this.canvas = $('#board');
+        this.hud = $('#hud');
+        this.renderer = new Renderer(this.canvas, this.hud);
+        this.components = [];
+        this.wires = [];
+        this.selected = null;
+        this.tool = 'select';
+        this.wirePending = null;
+        this.audio = new AudioBus();
+        window.addEventListener('pointerdown', () => this.audio._ensure(), { once: true });
+        this._buildSidebar();
+        this.props = new PropertyPanel($('#props'), this);
+        this.props.render();
+        this.running = true;
+        this.toolbar = new Toolbar($('#toolbar'), this);
+        this.toolbar.render();
+        this.storage = new Storage(this);
+        this.compare = new CompareOverlay(this);
+        this.tour = new Tour(this);
+        setTimeout(() => this.tour.start(false), 400);
+        if (this.storage.loadFromHash()) this.toast('Loaded shared circuit.', 'info');
+        this.graph = new CircuitGraph(this.components, this.wires);
+        this._wireInput();
+        this._loop = this._loop.bind(this);
+        requestAnimationFrame(this._loop);
+      }
+      _buildSidebar() {
+        const sidebar = $('#sidebar');
+        sidebar.textContent = '';
+        const ph = document.createElement('h3');
+        ph.textContent = 'Build a Circuit';
+        ph.style.cssText = 'font-size:18px;font-weight:700;color:var(--ink);margin:8px 4px 10px;letter-spacing:0';
+        sidebar.append(ph);
+        const pg = document.createElement('div');
+        pg.style.cssText = 'display:grid;grid-template-columns:1fr;gap:8px';
+        for (const def of CATALOG.filter(d => d.tier === 'primary')) pg.append(this._makeTile(def, true));
+        sidebar.append(pg);
+        const toggle = document.createElement('button');
+        toggle.className = 'explore-toggle';
+        toggle.textContent = 'Explore More';
+        toggle.setAttribute('aria-expanded', 'false');
+        const es = document.createElement('div');
+        es.className = 'explore-section';
+        toggle.addEventListener('click', () => {
+          const open = es.classList.toggle('open');
+          toggle.classList.toggle('open', open);
+          toggle.setAttribute('aria-expanded', String(open));
+        });
+        sidebar.append(toggle);
+        const eGroups = [
+          ['power', 'More Power Sources'],
+          ['passive', 'Extra Parts'],
+          ['active', 'Advanced Components'],
+          ['meter', 'Measuring Tools'],
+          ['wire', 'Wires'],
+        ];
+        const eItems = CATALOG.filter(d => d.tier === 'explore');
+        for (const [cat, label] of eGroups) {
+          const items = eItems.filter(d => d.cat === cat);
+          if (!items.length) continue;
+          const h = document.createElement('h3');
+          h.textContent = label;
+          h.style.cssText = 'font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:12px 4px 6px';
+          es.append(h);
+          const grid = document.createElement('div');
+          grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:6px';
+          for (const def of items) grid.append(this._makeTile(def, false));
+          es.append(grid);
+        }
+        sidebar.append(es);
+      }
+      _makeTile(def, big) {
+        const tile = document.createElement('button');
+        tile.type = 'button';
+        tile.className = 'tile';
+        tile.draggable = true;
+        tile.dataset.id = def.id;
+        tile.tabIndex = 0;
+        tile.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            const stage = $('#stage').getBoundingClientRect();
+            const cx = this.renderer.screenToWorld(stage.width/2, stage.height/2);
+            this.addComponent(def.id, cx.x, cx.y);
+          }
+        });
+        tile.setAttribute('aria-label', `${def.name}. ${def.friendly || ''}`);
+        tile.title = def.friendly || def.name;
+        if (big) {
+          tile.style.cssText = 'display:flex;flex-direction:row;align-items:center;gap:10px;padding:12px 14px;background:#fff;border:1px solid var(--grid);border-radius:10px;cursor:grab;font:inherit;color:var(--ink);min-height:60px;width:100%';
+          const ic = document.createElement('div');
+          ic.style.cssText = 'width:48px;height:36px;background:var(--bg);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--muted);flex-shrink:0';
+          ic.textContent = def.id.slice(0, 3);
+          const nm = document.createElement('span');
+          nm.textContent = def.name;
+          nm.style.cssText = 'font-size:16px;font-weight:600;line-height:1.3';
+          tile.append(ic, nm);
+        } else {
+          tile.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;background:#fff;border:1px solid var(--grid);border-radius:8px;cursor:grab;font:inherit;color:var(--ink)';
+          const ic = document.createElement('div');
+          ic.style.cssText = 'width:40px;height:26px;background:var(--bg);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted)';
+          ic.textContent = def.id.slice(0, 3);
+          const nm = document.createElement('span');
+          nm.textContent = def.name;
+          nm.style.cssText = 'font-size:13px;text-align:center;line-height:1.2';
+          tile.append(ic, nm);
+        }
+        tile.addEventListener('dragstart', e => {
+          e.dataTransfer.setData('text/cp-id', def.id);
+          e.dataTransfer.effectAllowed = 'copy';
+        });
+        return tile;
+      }
+      addComponent(catalogId, x, y) {
+        const def = CATALOG_BY_ID[catalogId];
+        if (!def) return;
+        if (def.cat === 'wire') { this.toast('To draw a wire, click a dot on one component, then a dot on another.', 'warn'); return; }
+        const comp = new Component(def.id, x, y);
+        Object.assign(comp.props, JSON.parse(JSON.stringify(def.defaultProps)));
+        // generic two-pin placement; specific subclasses will override in later tasks
+        if (def.kind === 'npn') {
+          comp.pins.push(new Pin(comp, -30, 0, 'B'), new Pin(comp, 12, -24, 'C'), new Pin(comp, 12, 24, 'E'));
+        } else if (def.cat === 'meter') {
+          comp.pins.push(new Pin(comp, -30, 0, 'P+'), new Pin(comp, 30, 0, 'P−'));
+        } else {
+          comp.pins.push(new Pin(comp, -30, 0, 'A'), new Pin(comp, 30, 0, 'B'));
+        }
+        this.components.push(comp);
+        this.onTopologyChanged();
+        this.toast(`${def.name} added to your circuit!`, 'success');
+      }
+      toast(msg, kind='info') {
+        const host = $('#toasts');
+        const el = document.createElement('div');
+        el.className = `toast ${kind}`;
+        el.textContent = msg;
+        host.append(el);
+        setTimeout(() => el.remove(), 2800);
+      }
+      select(comp) {
+        if (this.selected) this.selected.selected = false;
+        this.selected = comp || null;
+        if (comp) comp.selected = true;
+        this.props.render();
+      }
+      remove(comp) {
+        this.components = this.components.filter(c => c !== comp);
+        this.wires = this.wires.filter(w => w.a.component !== comp && w.b.component !== comp);
+        this.onTopologyChanged();
+        if (this.selected === comp) this.selected = null;
+        this.toast('Component removed.', 'info');
+      }
+      _pinAt(wx, wy) {
+        for (const c of this.components) {
+          for (const p of c.pins) {
+            if (dist(wx, wy, p.worldX(), p.worldY()) <= CONFIG.pin.hitRadius) return p;
+          }
+        }
+        return null;
+      }
+      setTool(t) { this.tool = t; this.wirePending = null; }
+      zoomToFit() {
+        if (this.components.length === 0) { this.renderer.zoom = 1; this.renderer.pan = { x: 0, y: 0 }; return; }
+        let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+        for (const c of this.components) {
+          const b = c.bounds();
+          minX=Math.min(minX,b.x); minY=Math.min(minY,b.y);
+          maxX=Math.max(maxX,b.x+b.w); maxY=Math.max(maxY,b.y+b.h);
+        }
+        const pad = 60;
+        const w = (maxX-minX) + pad*2, h = (maxY-minY) + pad*2;
+        const z = clamp(Math.min(this.renderer.cssW/w, this.renderer.cssH/h), CONFIG.canvas.minZoom, CONFIG.canvas.maxZoom);
+        this.renderer.zoom = z;
+        this.renderer.pan.x = -minX*z + (this.renderer.cssW - (maxX-minX)*z)/2;
+        this.renderer.pan.y = -minY*z + (this.renderer.cssH - (maxY-minY)*z)/2;
+      }
+      resetSim() {
+        for (const c of this.components) { c.state = {}; if (CATALOG_BY_ID[c.type].kind === 'fuse') c.props.blown = false; }
+        this.onTopologyChanged();
+        this.toast('Circuit reset! Everything is back to normal.', 'success');
+      }
+      confirmClearBoard() {
+        const ov = $('#overlay'); ov.textContent = '';
+        const sheet = document.createElement('div'); sheet.className = 'sheet';
+        sheet.style.maxWidth = '360px';
+        const h = document.createElement('h2'); h.textContent = 'Clear the board?'; h.style.marginTop = '0';
+        const p = document.createElement('p'); p.textContent = 'This will remove everything on your board. Are you sure?';
+        const row = document.createElement('div'); row.style.cssText = 'display:flex; gap:8px; justify-content:flex-end';
+        const cancel = document.createElement('button'); cancel.className = 'btn'; cancel.textContent = 'Cancel';
+        const ok = document.createElement('button'); ok.className = 'btn primary'; ok.textContent = 'Clear everything';
+        cancel.onclick = () => ov.classList.remove('show');
+        ok.onclick = () => { this.components = []; this.wires = []; this.selected = null; this.onTopologyChanged(); ov.classList.remove('show'); this.toast('All cleared! Ready for a new circuit.', 'info'); };
+        row.append(cancel, ok);
+        sheet.append(h, p, row); ov.append(sheet); ov.classList.add('show');
+      }
+      onTopologyChanged() {
+        this.graph = new CircuitGraph(this.components, this.wires);
+        this.solver = new CircuitSolver(this.graph, this.components, this.wires);
+        this.solver.solve();
+        this._applySolverToComponents();
+        this._handleStatus();
+        this.props?.render();
+        this._recolourWires();
+      }
+      onPropertyChanged() { this.onTopologyChanged(); this.props?.render(); }
+      _applySolverToComponents() {
+        for (const c of this.components) {
+          c.state.current = this.solver.branchCurrents.get(c.id) || 0;
+          if (c.pins.length >= 2) {
+            const va = this.solver.nodeVoltages[c.pins[0].nodeId] || 0;
+            const vb = this.solver.nodeVoltages[c.pins[1].nodeId] || 0;
+            c.state.voltageAcross = va - vb;
+            c.state.power = Math.abs(c.state.current * c.state.voltageAcross);
+          } else {
+            c.state.voltageAcross = 0; c.state.power = 0;
+          }
+        }
+        for (const w of this.wires) {
+          // Wires are ideal; current along wire = sum of component branch current entering node (approx).
+          // For animation, pick the larger-magnitude current on either end pin's parent component.
+          const ia = this.solver.branchCurrents.get(w.a.component.id) || 0;
+          const ib = this.solver.branchCurrents.get(w.b.component.id) || 0;
+          w.current = Math.abs(ia) > Math.abs(ib) ? ia : ib;
+        }
+        let buzzerOn = false;
+        for (const c of this.components) {
+          if (CATALOG_BY_ID[c.type].kind === 'buzzer' && Math.abs(c.state.current||0) >= CONFIG.simulation.buzzerThresholdA) {
+            buzzerOn = true; break;
+          }
+        }
+        this.audio?.setBuzzer(buzzerOn);
+      }
+      _recolourWires() {
+        for (const w of this.wires) {
+          // find any component that touches both endpoint nodes and is a power source
+          const posNode = new Set(), negNode = new Set(), neutralNode = new Set();
+          for (const c of this.components) {
+            const def = CATALOG_BY_ID[c.type];
+            if (def.cat !== 'power') continue;
+            if (def.kind === 'mains') { neutralNode.add(c.pins[0].nodeId); neutralNode.add(c.pins[1].nodeId); }
+            else { posNode.add(c.pins[0].nodeId); negNode.add(c.pins[1].nodeId); }
+          }
+          const na = w.a.nodeId, nb = w.b.nodeId;
+          if (neutralNode.has(na) || neutralNode.has(nb)) w.colour = '#3a77c9';
+          else if (posNode.has(na) || posNode.has(nb)) w.colour = '#d9534f';
+          else if (negNode.has(na) || negNode.has(nb)) w.colour = '#1b2430';
+          else w.colour = '#1b2430';
+        }
+      }
+      _handleStatus() {
+        if (this.solver.status === 'short') {
+          this.toast('Careful! Too much electricity is flowing. This could break a real circuit!', 'warn');
+          // blow any fuse whose current exceeds its rating
+          for (const c of this.components) {
+            if (CATALOG_BY_ID[c.type].kind === 'fuse' && !c.props.blown) {
+              if (Math.abs(c.state.current) >= c.props.rating) {
+                c.props.blown = true;
+                this.toast('The fuse has blown! It broke on purpose to keep everything else safe.', 'warn');
+              }
+            }
+          }
+          // re-solve so the blown fuse opens the circuit
+          this.graph = new CircuitGraph(this.components, this.wires);
+          this.solver = new CircuitSolver(this.graph, this.components, this.wires);
+          this.solver.solve();
+          this._applySolverToComponents();
+        }
+      }
+      _drawScene() {
+        const ctx = this.renderer.ctx;
+        const t = this.running ? performance.now()/1000 : 0;
+        for (const w of this.wires) w.draw(ctx, t);
+        for (const c of this.components) { c.draw(ctx); c.drawPins(ctx); }
+        if (this.tool === 'wire' && this.wirePending) {
+          ctx.strokeStyle = '#2aa6b8';
+          ctx.lineWidth = CONFIG.wire.selectedWidth;
+          ctx.setLineDash([6,5]);
+          ctx.beginPath();
+          ctx.moveTo(this.wirePending.worldX(), this.wirePending.worldY());
+          ctx.lineTo(this.renderer.world.mx, this.renderer.world.my);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // highlight a pin under the cursor when wire tool active
+        if (this.tool === 'wire') {
+          const p = this._pinAt(this.renderer.world.mx, this.renderer.world.my);
+          if (p) {
+            ctx.beginPath();
+            ctx.arc(p.worldX(), p.worldY(), CONFIG.pin.hitRadius, 0, Math.PI*2);
+            ctx.strokeStyle = '#2aa6b8'; ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        }
+      }
+      _wireInput() {
+        const c = this.canvas;
+        c.addEventListener('mousemove', e => {
+          const r = c.getBoundingClientRect();
+          const w = this.renderer.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+          this.renderer.world.mx = w.x;
+          this.renderer.world.my = w.y;
+        });
+        c.addEventListener('wheel', e => {
+          e.preventDefault();
+          const r = c.getBoundingClientRect();
+          const sx = e.clientX - r.left, sy = e.clientY - r.top;
+          const before = this.renderer.screenToWorld(sx, sy);
+          const factor = e.deltaY < 0 ? CONFIG.canvas.zoomStep : 1 / CONFIG.canvas.zoomStep;
+          this.renderer.zoom = clamp(this.renderer.zoom * factor, CONFIG.canvas.minZoom, CONFIG.canvas.maxZoom);
+          const after = this.renderer.screenToWorld(sx, sy);
+          this.renderer.pan.x += (after.x - before.x) * this.renderer.zoom;
+          this.renderer.pan.y += (after.y - before.y) * this.renderer.zoom;
+        }, { passive: false });
+        let drag = null;
+        c.addEventListener('mousedown', e => {
+          if (e.button !== CONFIG.canvas.panButton) return;
+          const r = c.getBoundingClientRect();
+          const w = this.renderer.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+          if (this.tool === 'delete') {
+            const comp = [...this.components].reverse().find(cm => cm.hitTest(w.x, w.y));
+            if (comp) { this.remove(comp); return; }
+            const wire = [...this.wires].reverse().find(wi => wi.hitTest(w.x, w.y));
+            if (wire) { this.wires = this.wires.filter(x => x !== wire); this.toast('Wire removed.', 'info'); this.onTopologyChanged(); return; }
+            return;
+          }
+          if (this.tool === 'wire') {
+            const pin = this._pinAt(w.x, w.y);
+            if (pin) {
+              if (!this.wirePending) { this.wirePending = pin; }
+              else if (this.wirePending !== pin) {
+                this.wires.push(new Wire(this.wirePending, pin, '#1b2430'));
+                this.wirePending = null;
+                this.toast('Wire connected!', 'success');
+                this.onTopologyChanged();
+              }
+            } else {
+              this.wirePending = null;
+            }
+            return;
+          }
+          const hit = [...this.components].reverse().find(cm => cm.hitTest(w.x, w.y));
+          if (hit) {
+            this.select(hit);
+            drag = { kind:'move', comp:hit, ox:w.x - hit.x, oy:w.y - hit.y };
+          } else {
+            this.select(null);
+            drag = { kind:'pan', sx:e.clientX, sy:e.clientY, px:this.renderer.pan.x, py:this.renderer.pan.y };
+          }
+        });
+        c.addEventListener('contextmenu', e => {
+          e.preventDefault();
+          const r = c.getBoundingClientRect();
+          const w = this.renderer.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+          const wire = [...this.wires].reverse().find(wi => wi.hitTest(w.x, w.y));
+          if (wire) { this.wires = this.wires.filter(x => x !== wire); this.toast('Wire removed.', 'info'); this.onTopologyChanged(); return; }
+          const comp = [...this.components].reverse().find(cm => cm.hitTest(w.x, w.y));
+          if (comp) this.remove(comp);
+        });
+        c.addEventListener('dblclick', e => {
+          const r = c.getBoundingClientRect();
+          const w = this.renderer.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+          const hit = [...this.components].reverse().find(cm => cm.hitTest(w.x, w.y));
+          if (!hit) return;
+          const def = CATALOG_BY_ID[hit.type];
+          if (def.kind === 'switch') {
+            hit.props.closed = !hit.props.closed;
+            this.onPropertyChanged();
+          }
+        });
+        window.addEventListener('mousemove', e => {
+          if (!drag) return;
+          if (drag.kind === 'pan') {
+            this.renderer.pan.x = drag.px + (e.clientX - drag.sx);
+            this.renderer.pan.y = drag.py + (e.clientY - drag.sy);
+          } else if (drag.kind === 'move') {
+            const r = c.getBoundingClientRect();
+            const w = this.renderer.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+            drag.comp.x = snap(w.x - drag.ox);
+            drag.comp.y = snap(w.y - drag.oy);
+          }
+        });
+        window.addEventListener('mouseup', () => drag = null);
+        window.addEventListener('keydown', e => {
+          if (!e.ctrlKey && !e.metaKey) {
+            if (e.key === 'v' || e.key === 'V') { this.setTool('select'); this.toolbar?.render(); }
+            if (e.key === 'w' || e.key === 'W') { this.setTool('wire'); this.toolbar?.render(); }
+            if (e.key === 'd' || e.key === 'D') { this.setTool('delete'); this.toolbar?.render(); }
+            if (e.key === ' ') { e.preventDefault(); this.running = !this.running; TIME.freeze = this.running ? null : performance.now()/1000; this.toolbar?.render(); }
+          }
+          if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); this.zoomToFit(); }
+          if ((e.key === 'Delete' || e.key === 'Backspace') && this.selected) {
+            this.remove(this.selected);
+          }
+          if (this.selected && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
+            e.preventDefault();
+            const s = CONFIG.grid.size;
+            if (e.key==='ArrowUp') this.selected.y -= s;
+            if (e.key==='ArrowDown') this.selected.y += s;
+            if (e.key==='ArrowLeft') this.selected.x -= s;
+            if (e.key==='ArrowRight') this.selected.x += s;
+            this.onTopologyChanged();
+          }
+        });
+        let touchState = null;
+        c.addEventListener('touchstart', e => {
+          if (e.touches.length === 2) {
+            const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            touchState = { kind:'pinch', d, zoom: this.renderer.zoom };
+          } else if (e.touches.length === 1) {
+            const t = e.touches[0]; const r = c.getBoundingClientRect();
+            const w = this.renderer.screenToWorld(t.clientX - r.left, t.clientY - r.top);
+            touchState = { kind:'tap', w, start: performance.now() };
+          }
+        }, { passive: true });
+        c.addEventListener('touchmove', e => {
+          if (touchState?.kind === 'pinch' && e.touches.length === 2) {
+            const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            const f = d / touchState.d;
+            this.renderer.zoom = clamp(touchState.zoom * f, CONFIG.canvas.minZoom, CONFIG.canvas.maxZoom);
+          }
+        }, { passive: true });
+        c.addEventListener('touchend', e => {
+          if (touchState?.kind === 'tap' && performance.now() - touchState.start < 400) {
+            const hit = [...this.components].reverse().find(cm => cm.hitTest(touchState.w.x, touchState.w.y));
+            this.select(hit || null);
+          }
+          touchState = null;
+        });
+        c.addEventListener('dragover', e => {
+          if (e.dataTransfer.types.includes('text/cp-id')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
+        });
+        c.addEventListener('drop', e => {
+          const id = e.dataTransfer.getData('text/cp-id');
+          if (!id || !CATALOG_BY_ID[id]) return;
+          e.preventDefault();
+          const r = c.getBoundingClientRect();
+          const w = this.renderer.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+          this.addComponent(id, w.x, w.y);
+        });
+      }
+      _loop() {
+        this.renderer.tick();
+        this._drawScene();
+        requestAnimationFrame(this._loop);
+      }
+    }
+    window._app = new App();
+  </script>
+  <!-- #endregion -->
+</body>
+</html>
